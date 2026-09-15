@@ -22,6 +22,7 @@ a phone or computer.
 - Full-bleed button images and browser-rendered emoji artwork
 - Contextual quick tips and detailed `?` help for important settings
 - Mouse drag-and-drop and touch long-press button rearranging
+- On-device Settings screen with brightness, setup-hotspot and restart controls
 
 ## Supported boards
 
@@ -66,13 +67,17 @@ pio run -e elecrow_5 -t upload
 
 The `dist` folder contains separate binaries for each board:
 
-- `ShowDeck-v0.4.0-CYD-update.bin` and `ShowDeck-v0.4.0-CYD-factory.bin`
-- `ShowDeck-v0.4.0-Elecrow5-V3-update.bin` and
-  `ShowDeck-v0.4.0-Elecrow5-V3-factory.bin`
+- `ShowDeck-v0.4.1-CYD-update.bin` and `ShowDeck-v0.4.1-CYD-factory.bin`
+- `ShowDeck-v0.4.1-Elecrow5-V3-update.bin` and
+  `ShowDeck-v0.4.1-Elecrow5-V3-factory.bin`
 
 An update image is written at `0x10000` and preserves the saved LittleFS button
 configuration. A factory image is written at `0x0` for a first installation or
 complete reset and should be treated as destructive to the saved setup.
+
+Tap the gear in the physical display header to open on-device settings. The
+brightness `-` and `+` controls save immediately; Setup AP starts the editor
+hotspot and Restart reboots the deck.
 
 ## Button actions
 

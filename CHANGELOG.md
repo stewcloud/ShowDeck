@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1 — On-device settings and Elecrow save fix
+
+- Corrected the Elecrow filesystem partition label so `LittleFS.begin()` can
+  mount it and persist web-editor configuration and artwork.
+- Added a mount fallback for the original v0.4.0 Elecrow partition label so
+  the configuration-preserving update image fixes existing installations.
+- Replaced direct configuration writes with a temporary write, JSON
+  verification, backup and rollback sequence.
+- Added clear filesystem diagnostics and more useful browser save errors.
+- Added an on-device Settings screen, opened with the header gear, with
+  immediately saved brightness controls, setup-hotspot access and restart.
+- Added primitive-drawn Wi-Fi, status and settings iconography that does not
+  depend on Unicode font support.
+
 ## 0.4.0 — Elecrow 5-inch V3 support
 
 - Added a second PlatformIO target for the Elecrow DIS07050H 5-inch HMI,

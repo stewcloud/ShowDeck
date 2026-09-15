@@ -12,6 +12,12 @@ This target supports the Elecrow 5-inch HMI Basic board identified as
 - Status LED on GPIO 38, off by default
 - 4 MB flash and 8 MB octal PSRAM
 
+Version 0.4.1 corrects the custom partition label required by Arduino
+LittleFS. Earlier 0.4.0 Elecrow builds could run with an unmounted filesystem,
+which prevented configuration and artwork from persisting. The 0.4.1 firmware
+also recognizes the old label, so an update-only flash repairs an existing
+0.4.0 installation without requiring a factory erase.
+
 The RGB pins and panel timing are based on Elecrow's V3.0 example. The original
 CYD remains available as the separate `cyd` PlatformIO environment.
 

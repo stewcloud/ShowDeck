@@ -76,6 +76,8 @@ constexpr uint8_t assetWidth = 96;
 constexpr uint8_t assetHeight = 59;
 constexpr uint8_t legacyAssetHeight = 42;
 constexpr char configPath[] = "/deck.json";
+constexpr char configTempPath[] = "/deck.tmp";
+constexpr char configBackupPath[] = "/deck.bak";
 constexpr char setupSsid[] = "ShowDeck-Setup";
 constexpr char setupPassword[] = "tikitime";
 
@@ -92,6 +94,9 @@ PubSubClient mqtt(wifiClient);
 JsonDocument config;
 uint8_t currentPage = 0;
 bool apMode = false;
+bool filesystemReady = false;
+bool settingsOpen = false;
+String settingsNotice;
 bool wasTouched = false;
 uint32_t touchStarted = 0;
 int16_t touchStartX = 0;
@@ -160,14 +165,63 @@ void defaultConfig() {
 }
 
 bool saveConfig() {
-  File file = LittleFS.open(configPath, "w");
-  if (!file) return false;
-  const bool ok = serializeJson(config, file) > 0;
+  if (!filesystemReady) {
+    Serial.println("Configuration save failed: LittleFS is not mounted");
+    return false;
+  }
+
+  LittleFS.remove(configTempPath);
+  File file = LittleFS.open(configTempPath, "w");
+  if (!file) {
+    Serial.println("Configuration save failed: could not create temporary file");
+    return false;
+  }
+  const size_t expected = measureJson(config);
+  const size_t written = serializeJson(config, file);
+  file.flush();
   file.close();
-  return ok;
+  if (!written || written != expected) {
+    LittleFS.remove(configTempPath);
+    Serial.printf("Configuration save failed: wrote %u of %u bytes\n",
+                  static_cast<unsigned>(written), static_cast<unsigned>(expected));
+    return false;
+  }
+
+  // Parse the temporary file before replacing the last known-good config.
+  File verifyFile = LittleFS.open(configTempPath, "r");
+  JsonDocument verifyConfig;
+  const DeserializationError verifyError = deserializeJson(verifyConfig, verifyFile);
+  verifyFile.close();
+  if (verifyError || !verifyConfig["pages"].is<JsonArray>()) {
+    LittleFS.remove(configTempPath);
+    Serial.printf("Configuration save failed verification: %s\n", verifyError.c_str());
+    return false;
+  }
+
+  LittleFS.remove(configBackupPath);
+  if (LittleFS.exists(configPath) && !LittleFS.rename(configPath, configBackupPath)) {
+    LittleFS.remove(configTempPath);
+    Serial.println("Configuration save failed: could not create backup");
+    return false;
+  }
+  if (!LittleFS.rename(configTempPath, configPath)) {
+    if (LittleFS.exists(configBackupPath)) LittleFS.rename(configBackupPath, configPath);
+    Serial.println("Configuration save failed: could not activate new file");
+    return false;
+  }
+  LittleFS.remove(configBackupPath);
+  Serial.printf("Configuration saved and verified (%u bytes)\n", static_cast<unsigned>(written));
+  return true;
 }
 
 void loadConfig() {
+  if (!filesystemReady) {
+    defaultConfig();
+    return;
+  }
+  if (!LittleFS.exists(configPath) && LittleFS.exists(configBackupPath)) {
+    LittleFS.rename(configBackupPath, configPath);
+  }
   if (!LittleFS.exists(configPath)) {
     defaultConfig();
     saveConfig();
@@ -218,6 +272,38 @@ String deviceHostName() {
   return clean.length() ? clean : "show-deck";
 }
 
+void drawWifiIcon(int16_t x, int16_t y, uint16_t color) {
+  // Small font-independent Wi-Fi mark made from simple display primitives.
+  tft.drawLine(x, y + 2, x + 7, y - 2, color);
+  tft.drawLine(x + 7, y - 2, x + 14, y + 2, color);
+  tft.drawLine(x + 3, y + 6, x + 7, y + 4, color);
+  tft.drawLine(x + 7, y + 4, x + 11, y + 6, color);
+  tft.fillCircle(x + 7, y + 10, 2, color);
+}
+
+void drawGearIcon(int16_t cx, int16_t cy, uint16_t color) {
+  tft.drawCircle(cx, cy, screenW > 320 ? 8 : 5, color);
+  tft.fillCircle(cx, cy, screenW > 320 ? 3 : 2, color);
+  const int16_t inner = screenW > 320 ? 10 : 7;
+  const int16_t outer = screenW > 320 ? 14 : 10;
+  tft.drawLine(cx - outer, cy, cx - inner, cy, color);
+  tft.drawLine(cx + inner, cy, cx + outer, cy, color);
+  tft.drawLine(cx, cy - outer, cx, cy - inner, color);
+  tft.drawLine(cx, cy + inner, cx, cy + outer, color);
+}
+
+void drawSunIcon(int16_t cx, int16_t cy, uint16_t color) {
+  const int16_t radius = screenW > 320 ? 16 : 9;
+  tft.drawCircle(cx, cy, radius, color);
+  tft.fillCircle(cx, cy, radius / 2, color);
+  const int16_t rayStart = radius + 4;
+  const int16_t rayEnd = radius + (screenW > 320 ? 12 : 7);
+  tft.drawLine(cx - rayEnd, cy, cx - rayStart, cy, color);
+  tft.drawLine(cx + rayStart, cy, cx + rayEnd, cy, color);
+  tft.drawLine(cx, cy - rayEnd, cx, cy - rayStart, color);
+  tft.drawLine(cx, cy + rayStart, cx, cy + rayEnd, color);
+}
+
 void drawHeader() {
   tft.fillRect(0, 0, screenW, headerH, TFT_BLACK);
   tft.setTextFont(headerFont);
@@ -225,9 +311,15 @@ void drawHeader() {
   JsonArray pages = config["pages"].as<JsonArray>();
   const char *pageName = pages[currentPage]["name"] | "PAGE";
   tft.drawString(pageName, 8, screenW > 320 ? 8 : 4);
-  String status = apMode ? "SETUP" : (WiFi.status() == WL_CONNECTED ? "WIFI" : "OFFLINE");
-  tft.setTextColor(apMode ? TFT_YELLOW : TFT_LIGHTGREY, TFT_BLACK);
-  tft.drawRightString(status, screenW - 8, screenW > 320 ? 8 : 4, headerFont);
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  String status = apMode ? "SETUP" : (connected ? "WIFI" : "OFFLINE");
+  const uint16_t statusColor = apMode ? TFT_YELLOW : (connected ? TFT_LIGHTGREY : TFT_RED);
+  const int16_t gearCenterX = screenW - (screenW > 320 ? 24 : 14);
+  const int16_t statusRight = screenW - (screenW > 320 ? 58 : 32);
+  tft.setTextColor(statusColor, TFT_BLACK);
+  tft.drawRightString(status, statusRight, screenW > 320 ? 8 : 4, headerFont);
+  drawWifiIcon(statusRight - (screenW > 320 ? 110 : 70), headerH / 2 - 6, statusColor);
+  drawGearIcon(gearCenterX, headerH / 2, TFT_LIGHTGREY);
 }
 
 bool drawAsset(const char *path, int16_t x, int16_t y) {
@@ -306,10 +398,62 @@ void drawButton(uint8_t slot, bool pressed = false) {
 }
 
 void drawDeck() {
+  settingsOpen = false;
   if (currentPage >= pageCount()) currentPage = 0;
   tft.fillScreen(TFT_BLACK);
   drawHeader();
   for (uint8_t i = 0; i < buttonsPerPage; ++i) drawButton(i);
+}
+
+void drawSettingsScreen() {
+  settingsOpen = true;
+  const bool large = screenW > 320;
+  const int16_t margin = large ? 24 : 9;
+  const int16_t controlY = large ? 112 : 58;
+  const int16_t controlH = large ? 94 : 55;
+  const int16_t sideW = large ? 120 : 66;
+  const int16_t actionY = large ? 340 : 157;
+  const int16_t actionH = large ? 92 : 58;
+  const int16_t gap = large ? 18 : 8;
+  tft.fillScreen(TFT_BLACK);
+  tft.fillRect(0, 0, screenW, headerH, tft.color565(20, 29, 33));
+  tft.setTextFont(headerFont);
+  tft.setTextColor(TFT_ORANGE, tft.color565(20, 29, 33));
+  tft.drawString("<  SETTINGS", margin, large ? 8 : 4);
+
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.setTextFont(buttonFont);
+  tft.drawString("BRIGHTNESS", margin, large ? 68 : 32);
+  drawSunIcon(screenW - margin - (large ? 26 : 14), large ? 82 : 39, TFT_YELLOW);
+
+  tft.fillRoundRect(margin, controlY, sideW, controlH, buttonRadius, tft.color565(49, 91, 104));
+  tft.fillRoundRect(screenW - margin - sideW, controlY, sideW, controlH, buttonRadius, tft.color565(49, 91, 104));
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString("-", margin + sideW / 2, controlY + controlH / 2, large ? 6 : 4);
+  tft.drawString("+", screenW - margin - sideW / 2, controlY + controlH / 2, large ? 6 : 4);
+
+  const int16_t barX = margin + sideW + gap;
+  const int16_t barW = screenW - 2 * (margin + sideW + gap);
+  const int16_t barY = controlY + controlH / 2 - (large ? 12 : 7);
+  const int16_t barH = large ? 24 : 14;
+  const int brightness = constrain(config["brightness"] | 220, 20, 255);
+  tft.fillRoundRect(barX, barY, barW, barH, barH / 2, TFT_DARKGREY);
+  tft.fillRoundRect(barX, barY, map(brightness, 20, 255, 4, barW), barH, barH / 2, TFT_YELLOW);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(String(brightness), screenW / 2, controlY + controlH + (large ? 28 : 16), buttonFont);
+
+  const int16_t actionW = (screenW - 2 * margin - gap) / 2;
+  tft.fillRoundRect(margin, actionY, actionW, actionH, buttonRadius, tft.color565(154, 100, 20));
+  tft.fillRoundRect(margin + actionW + gap, actionY, actionW, actionH, buttonRadius, tft.color565(80, 60, 60));
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString("SETUP AP", margin + actionW / 2, actionY + actionH / 2, buttonFont);
+  tft.drawString("RESTART", margin + actionW + gap + actionW / 2, actionY + actionH / 2, buttonFont);
+  if (settingsNotice.length()) {
+    tft.setTextColor(settingsNotice.startsWith("Saved") ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
+    tft.drawString(settingsNotice, screenW / 2, actionY - (large ? 34 : 20), large ? 2 : 1);
+  }
+  tft.setTextDatum(TL_DATUM);
 }
 
 void setRadioChannel(uint8_t channel) {
@@ -428,10 +572,15 @@ void setupWebServer() {
     if ((incoming["password"] | "")[0] == '\0') incoming["password"] = config["password"];
     if ((incoming["mqttPassword"] | "")[0] == '\0') incoming["mqttPassword"] = config["mqttPassword"];
     incoming["version"] = 3;
+    JsonDocument previousConfig = config;
     config = incoming;
     if (currentPage >= pageCount()) currentPage = 0;
     if (!saveConfig()) {
-      server.send(500, "text/plain", "Could not write configuration");
+      config = previousConfig;
+      String detail = "Could not write configuration";
+      if (!filesystemReady) detail += ": LittleFS did not mount";
+      else detail += " (free " + String(LittleFS.totalBytes() - LittleFS.usedBytes()) + " bytes)";
+      server.send(500, "text/plain", detail);
       return;
     }
     ledcWrite(0, constrain(config["brightness"] | 220, 20, 255));
@@ -514,6 +663,57 @@ int8_t buttonAt(int16_t x, int16_t y) {
   return row * 3 + col;
 }
 
+void handleSettingsTap(int16_t x, int16_t y) {
+  const bool large = screenW > 320;
+  const int16_t margin = large ? 24 : 9;
+  const int16_t controlY = large ? 112 : 58;
+  const int16_t controlH = large ? 94 : 55;
+  const int16_t sideW = large ? 120 : 66;
+  const int16_t actionY = large ? 340 : 157;
+  const int16_t actionH = large ? 92 : 58;
+  const int16_t gap = large ? 18 : 8;
+
+  if (y < headerH) {
+    settingsNotice = "";
+    drawDeck();
+    return;
+  }
+
+  int brightness = constrain(config["brightness"] | 220, 20, 255);
+  bool changed = false;
+  if (y >= controlY && y < controlY + controlH && x >= margin && x < margin + sideW) {
+    brightness = max(20, brightness - 20);
+    changed = true;
+  } else if (y >= controlY && y < controlY + controlH &&
+             x >= screenW - margin - sideW && x < screenW - margin) {
+    brightness = min(255, brightness + 20);
+    changed = true;
+  }
+  if (changed) {
+    config["brightness"] = brightness;
+    ledcWrite(0, brightness);
+    settingsNotice = saveConfig() ? "Saved" : "SAVE FAILED";
+    drawSettingsScreen();
+    return;
+  }
+
+  if (y >= actionY && y < actionY + actionH) {
+    const int16_t actionW = (screenW - 2 * margin - gap) / 2;
+    if (x >= margin && x < margin + actionW) {
+      if (!apMode) startSetupPortal();
+      settingsNotice = "Setup AP active";
+      drawSettingsScreen();
+    } else if (x >= margin + actionW + gap && x < screenW - margin) {
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawString("RESTARTING", screenW / 2, screenH / 2, buttonFont);
+      delay(350);
+      ESP.restart();
+    }
+  }
+}
+
 void handleTouch() {
   int16_t x, y;
   const bool touchedNow = readTouch(x, y);
@@ -524,13 +724,25 @@ void handleTouch() {
     touchStartY = y;
     lastTouchX = x;
     lastTouchY = y;
-    const int8_t slot = buttonAt(x, y);
-    if (slot >= 0) drawButton(slot, true);
+    if (!settingsOpen) {
+      const int8_t slot = buttonAt(x, y);
+      if (slot >= 0) drawButton(slot, true);
+    }
   } else if (touchedNow && wasTouched) {
     lastTouchX = x;
     lastTouchY = y;
   } else if (!touchedNow && wasTouched) {
     wasTouched = false;
+    if (settingsOpen) {
+      handleSettingsTap(touchStartX, touchStartY);
+      return;
+    }
+    const int16_t settingsWidth = screenW > 320 ? 52 : 30;
+    if (touchStartY < headerH && touchStartX >= screenW - settingsWidth) {
+      settingsNotice = "";
+      drawSettingsScreen();
+      return;
+    }
     const int16_t deltaX = lastTouchX - touchStartX;
     if (abs(deltaX) > swipeThreshold) {
       const uint8_t count = pageCount();
@@ -551,7 +763,23 @@ void setup() {
 #ifndef SHOWDECK_ELECROW_5
   pinMode(Pins::setupButton, INPUT_PULLUP);
 #endif
-  LittleFS.begin(true);
+  filesystemReady = LittleFS.begin(true);
+#ifdef SHOWDECK_ELECROW_5
+  // v0.4.0 factory images used "littlefs" as the partition label. An update
+  // image cannot replace that table, so accept both labels during migration.
+  if (!filesystemReady) {
+    Serial.println("Default LittleFS partition not found; trying v0.4.0 Elecrow label");
+    LittleFS.end();
+    filesystemReady = LittleFS.begin(true, "/littlefs", 10, "littlefs");
+  }
+#endif
+  if (filesystemReady) {
+    Serial.printf("LittleFS mounted: %u used of %u bytes\n",
+                  static_cast<unsigned>(LittleFS.usedBytes()),
+                  static_cast<unsigned>(LittleFS.totalBytes()));
+  } else {
+    Serial.println("LittleFS mount failed; configuration will be temporary");
+  }
   loadConfig();
 
 #ifdef SHOWDECK_ELECROW_5

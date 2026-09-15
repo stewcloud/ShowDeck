@@ -1,4 +1,0 @@
-9c56cd0afaebce92f09e6feba648736783fb45f40e2d912823d849065a67cd5b  ShowDeck-v0.4.0-CYD-factory.bin
-ccb55be0e21ae7d876ee13376cf71154ea1fe991570a9a2973fe88f757129254  ShowDeck-v0.4.0-CYD-update.bin
-6890bdbfa2700e489c46f07dc8fb68cf914a69e21284128c715b5fbcd9be1eb0  ShowDeck-v0.4.0-Elecrow5-V3-factory.bin
-666d45df6df49bc48069f7b3c504616c674b661ac6f09aa72d1fe6a8cdaef781  ShowDeck-v0.4.0-Elecrow5-V3-update.bin
