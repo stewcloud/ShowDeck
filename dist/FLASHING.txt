@@ -1,0 +1,40 @@
+Show Deck v0.4.0
+
+Choose the binary whose board name exactly matches your hardware.
+
+ORIGINAL ESP32-2432S028R / ILI9341 (CYD)
+------------------------------------------------------------
+Update an existing Show Deck (preserves saved configuration):
+
+  python -m esptool --chip esp32 --port COM5 write_flash 0x10000 ShowDeck-v0.4.0-CYD-update.bin
+
+First install or complete reset (destructive to saved configuration):
+
+  python -m esptool --chip esp32 --port COM5 erase_flash
+  python -m esptool --chip esp32 --port COM5 write_flash 0x0 ShowDeck-v0.4.0-CYD-factory.bin
+
+ELECROW DIS07050H 5-INCH HMI, HARDWARE V3.0
+------------------------------------------------------------
+Update an existing Show Deck (preserves saved configuration):
+
+  python -m esptool --chip esp32s3 --port COM5 write_flash 0x10000 ShowDeck-v0.4.0-Elecrow5-V3-update.bin
+
+First install or complete reset (destructive to saved configuration):
+
+  python -m esptool --chip esp32s3 --port COM5 erase_flash
+  python -m esptool --chip esp32s3 --port COM5 write_flash 0x0 ShowDeck-v0.4.0-Elecrow5-V3-factory.bin
+
+SETUP AFTER BOOT
+------------------------------------------------------------
+Wi-Fi: ShowDeck-Setup
+Password: tikitime
+Address: http://192.168.4.1/
+
+Install esptool with: python -m pip install esptool
+
+Replace COM5 with the device's actual port. On macOS/Linux it will resemble
+/dev/cu.usbserial-*, /dev/ttyUSB0, or /dev/ttyACM0.
+
+The Elecrow build is specifically for DIS07050H hardware V3.0. Do not use it on
+another CrowPanel revision or the Advanced/P4 model. Confirm the printed model
+and revision before flashing.
